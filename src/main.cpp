@@ -17,7 +17,6 @@
 /*--------------------------- Libraries -------------------------------*/
 #include <Arduino.h>
 #include <ledPWM.h>                 // For PWM LED controller
-#include <OXRS_SENSORS.h>           // For QWICC I2C sensors
 
 #if defined(OXRS_ESP32)
 #include <OXRS_32.h>                  // ESP32 support
@@ -73,9 +72,6 @@ PWMDriver pwmDriver;
 // LED strip config (allow for a max of all single LED strips)
 LEDStrip ledStrips[PWM_CHANNEL_COUNT];
 
-// I2C sensors
-OXRS_SENSORS sensors;
-
 /*--------------------------- JSON builders -----------------*/
 void setConfigSchema()
 {
@@ -84,22 +80,18 @@ void setConfigSchema()
 
   JsonObject strips = json["strips"].to<JsonObject>();
   strips["type"] = "array";
-  strips["description"] = "Define what strips are connected where";
   
-  JsonObject stripItems = strips["items"].to<JsonObject>();
-  stripItems["type"] = "object";
+  JsonObject items = strips["items"].to<JsonObject>();
+  items["type"] = "object";
 
-  JsonObject stripProperties = stripItems["properties"].to<JsonObject>();
+  JsonObject properties = items["properties"].to<JsonObject>();
 
-  JsonObject strip = stripProperties["strip"].to<JsonObject>();
-  strip["type"] = "integer";
-  strip["description"] = "Assigns an index to the strip, incrementing from 1, in the order it is wired to the controller";
-  strip["minimum"] = 1;
-  strip["maximum"] = PWM_CHANNEL_COUNT;
+  // JsonObject strip = properties["strip"].to<JsonObject>();
+  // strip["type"] = "integer";
+  // strip["minimum"] = 1;
+  // strip["maximum"] = PWM_CHANNEL_COUNT;
 
-  JsonObject type = stripProperties["type"].to<JsonObject>();
-  type["type"] = "string";
-  type["description"] = "Type of strip, defines the number of channels for this strip";
+  JsonObject type = properties["type"].to<JsonObject>();
   JsonArray typeEnum = type["enum"].to<JsonArray>();
   typeEnum.add("single");
   typeEnum.add("cct");
@@ -107,17 +99,13 @@ void setConfigSchema()
   typeEnum.add("rgbw");
   typeEnum.add("rgbww");
 
-  JsonArray required = stripItems["required"].to<JsonArray>();
+  JsonArray required = items["required"].to<JsonArray>();
   required.add("strip");
   required.add("type");
 
   JsonObject fadeIntervalUs = json["fadeIntervalUs"].to<JsonObject>();
   fadeIntervalUs["type"] = "integer";
   fadeIntervalUs["minimum"] = 0;
-  fadeIntervalUs["description"] = "Default time to fade from off -> on (and vice versa), in microseconds (defaults to 500us)";
-
-  // Add any sensor config
-  sensors.setConfigSchema(json);
 
   // Pass our config schema down to the hardware library
   oxrs.setConfigSchema(json.as<JsonVariant>());
@@ -147,38 +135,27 @@ void setCommandSchema()
   JsonObject colour = json["colour"].to<JsonObject>();
   colour["type"] = "object";
 
-  JsonObject colourProperties = colour["properties"].to<JsonObject>();
+  JsonObject properties = colour["properties"].to<JsonObject>();
 
-  JsonObject mired = colourProperties["mired"].to<JsonObject>();
+  JsonObject mired = properties["mired"].to<JsonObject>();
   mired["type"] = "integer";
   mired["minimum"] = 167;
   mired["maximum"] = 500;
 
-  JsonObject red = colourProperties["red"].to<JsonObject>();
+  JsonObject red = properties["red"].to<JsonObject>();
   red["type"] = "integer";
   red["minimum"] = 0;
   red["maximum"] = 255;
 
-  JsonObject green = colourProperties["green"].to<JsonObject>();
+  JsonObject green = properties["green"].to<JsonObject>();
   green["type"] = "integer";
   green["minimum"] = 0;
   green["maximum"] = 255;
 
-  JsonObject blue = colourProperties["blue"].to<JsonObject>();
+  JsonObject blue = properties["blue"].to<JsonObject>();
   blue["type"] = "integer";
   blue["minimum"] = 0;
   blue["maximum"] = 255;
-
-  JsonObject fadeIntervalUs = json["fadeIntervalUs"].to<JsonObject>();
-  fadeIntervalUs["type"] = "integer";
-  fadeIntervalUs["minimum"] = 0;
-
-  JsonObject restart = json["restart"].to<JsonObject>();
-  restart["type"] = "boolean";
-  restart["description"] = "Restart the controller";
-
-  // Add any sensor commands
-  sensors.setCommandSchema(json);
 
   // Pass our command schema down to the hardware library
   oxrs.setCommandSchema(json.as<JsonVariant>());
@@ -418,15 +395,6 @@ void jsonStripCommand(JsonVariant json)
       }
     }
   }
-
-  if (json.containsKey("fadeIntervalUs"))
-  {
-    ledStrip->fadeIntervalUs = json["fadeIntervalUs"].as<uint32_t>();
-  }
-  else
-  {
-    ledStrip->fadeIntervalUs = g_fade_interval_us;
-  }
 }
 
 void jsonConfig(JsonVariant json)
@@ -443,9 +411,6 @@ void jsonConfig(JsonVariant json)
   {
     g_fade_interval_us = json["fadeIntervalUs"].as<uint32_t>();
   }
-
-  // Let the sensors handle any config
-  sensors.conf(json);
 }
 
 void jsonCommand(JsonVariant json)
@@ -454,14 +419,6 @@ void jsonCommand(JsonVariant json)
   {
     jsonStripCommand(json);
   }
-
-  if (json.containsKey("restart") && json["restart"].as<bool>())
-  {
-    ESP.restart();
-  }
-
-  // Let the sensors handle any commands
-  sensors.cmnd(json);
 }
 
 /*--------------------------- Program -------------------------------*/
@@ -470,12 +427,6 @@ void setup()
   Serial.begin(SERIAL_BAUD_RATE);
   delay(1000);  
   Serial.println(F("[light] starting up..."));
-
-  // Start the I2C bus
-  Wire.begin(I2C_SDA, I2C_SCL);
-  
-  // Start the sensor library (scan for attached sensors)
-  sensors.begin();
 
   // Initialise PWM drivers
   initialisePwmDrivers();
@@ -498,13 +449,4 @@ void loop()
 
   // Process any PWM updates
   processStrips();
-
-  // Publish sensor telemetry (if any)
-  JsonDocument telemetry;
-  sensors.tele(telemetry.as<JsonVariant>());
-
-  if (telemetry.size() > 0)
-  {
-    oxrs.publishTelemetry(telemetry.as<JsonVariant>());
-  }
 }
