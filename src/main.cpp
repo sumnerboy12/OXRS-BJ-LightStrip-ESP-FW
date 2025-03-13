@@ -86,10 +86,10 @@ void setConfigSchema()
 
   JsonObject properties = items["properties"].to<JsonObject>();
 
-  // JsonObject strip = properties["strip"].to<JsonObject>();
-  // strip["type"] = "integer";
-  // strip["minimum"] = 1;
-  // strip["maximum"] = PWM_CHANNEL_COUNT;
+  JsonObject strip = properties["strip"].to<JsonObject>();
+  strip["type"] = "integer";
+  strip["minimum"] = 1;
+  strip["maximum"] = PWM_CHANNEL_COUNT;
 
   JsonObject type = properties["type"].to<JsonObject>();
   JsonArray typeEnum = type["enum"].to<JsonArray>();
@@ -184,26 +184,26 @@ void initialisePwmDrivers()
 void ledFade(LEDStrip * strip, uint8_t channelOffset, uint8_t colour[])
 {
   if ((micros() - strip->lastFadeUs) > strip->fadeIntervalUs)
-  {    
+  {
     if (strip->channels == 1) 
     {
-      pwmDriver.crossfade(strip->index, channelOffset, strip->brightness * colour[0]);
+      pwmDriver.crossfade(strip->index, channelOffset, colour[0]);
     }
     else if (strip->channels == 2) 
     {
-      pwmDriver.crossfade(strip->index, channelOffset, strip->brightness * colour[0], strip->brightness * colour[1]);
+      pwmDriver.crossfade(strip->index, channelOffset, colour[0], colour[1]);
     }
     else if (strip->channels == 3) 
     {
-      pwmDriver.crossfade(strip->index, channelOffset, strip->brightness * colour[0], strip->brightness * colour[1], strip->brightness * colour[2]);
+      pwmDriver.crossfade(strip->index, channelOffset, colour[0], colour[1], colour[2]);
     }
     else if (strip->channels == 4) 
     {
-      pwmDriver.crossfade(strip->index, channelOffset, strip->brightness * colour[0], strip->brightness * colour[1], strip->brightness * colour[2], strip->brightness * colour[3]);
+      pwmDriver.crossfade(strip->index, channelOffset, colour[0], colour[1], colour[2], colour[3]);
     }
     else if (strip->channels == 5) 
     {
-      pwmDriver.crossfade(strip->index, channelOffset, strip->brightness * colour[0], strip->brightness * colour[1], strip->brightness * colour[2], strip->brightness * colour[3], strip->brightness * colour[4]);
+      pwmDriver.crossfade(strip->index, channelOffset, colour[0], colour[1], colour[2], colour[3], colour[4]);
     }  
 
     strip->lastFadeUs = micros();
@@ -236,7 +236,6 @@ void processStrips()
 {
   uint8_t OFF[MAX_LED_COUNT];
   memset(OFF, 0, sizeof(OFF));
-  uint16_t pcaState = 0x0;
 
   uint8_t channelOffset = 0;
 
@@ -246,13 +245,20 @@ void processStrips()
 
     if (ledStrip->state == LED_STATE_OFF)
     {
-      // off
       ledFade(ledStrip, channelOffset, OFF);
     }
     else if (ledStrip->state == LED_STATE_ON)
     {
-      // fade
-      ledFade(ledStrip, channelOffset, ledStrip->colour);
+      float_t brightness_pct = ((float_t)ledStrip->brightness / (float_t)255);
+    
+      uint8_t colour[MAX_LED_COUNT];
+
+      for (uint8_t i = 0; i < ledStrip->channels; i++) 
+      {
+        colour[i] = ledStrip->colour[i] * brightness_pct;
+      }
+
+      ledFade(ledStrip, channelOffset, colour);
     }
 
     // increase offset
@@ -289,24 +295,31 @@ void jsonStripConfig(JsonVariant json)
   LEDStrip * ledStrip = &ledStrips[strip - 1];
 
   const char * type = json["type"].as<const char *>();
-  if (strcmp(type, "single")) {
+  if (strcmp(type, "single") == 0) {
     ledStrip->channels = 1;
-  } else if (strcmp(type, "cct")) {
+  } else if (strcmp(type, "cct") == 0) {
     ledStrip->channels = 2;
-  } else if (strcmp(type, "rgb")) {
+  } else if (strcmp(type, "rgb") == 0) {
     ledStrip->channels = 3;
-  } else if (strcmp(type, "rgbw")) {
+  } else if (strcmp(type, "rgbw") == 0) {
     ledStrip->channels = 4;
-  } else if (strcmp(type, "rgbww")) {
+  } else if (strcmp(type, "rgbww") == 0) {
     ledStrip->channels = 5;  
   }
 
   ledStrip->state = LED_STATE_OFF;
-  ledStrip->brightness = 0;
+  ledStrip->brightness = 255;
 
-  for (uint8_t i = 0; i < MAX_LED_COUNT; i++)
+  // if only a single channel control is via brightness only
+  if (ledStrip->channels == 1) 
   {
-    ledStrip->colour[i] = 0;
+    ledStrip->colour[0] = 255;
+  } else 
+  {
+    for (uint8_t i = 0; i < ledStrip->channels; i++)
+    {
+      ledStrip->colour[i] = 0;
+    }
   }
 }
 
@@ -343,7 +356,7 @@ void jsonStripCommand(JsonVariant json)
   if (json.containsKey("colour"))
   {
     JsonObject colour = json["colour"].as<JsonObject>();
-    
+
     if (colour.containsKey("red"))
     {
       ledStrip->colour[0] = colour["red"].as<uint8_t>();
@@ -361,25 +374,25 @@ void jsonStripCommand(JsonVariant json)
 
     if (colour.containsKey("mired"))
     {
-      uint8_t mired = colour["mired"].as<uint8_t>();
-      uint8_t kelvin = 1000000 / mired;
+      uint16_t mired = colour["mired"].as<uint16_t>();
+      float_t kelvin = 1000000L / mired;
 
       // CW range is 2500-6000K
       // WW range is 2000-5500K
-      if (kelvin < 2000) kelvin = 2000;
-      if (kelvin > 6000) kelvin = 6000;
+      if (kelvin < 2000) kelvin = 2000L;
+      if (kelvin > 6000) kelvin = 6000L;
 
       uint8_t cw = 0;
       if (kelvin > 2500)
       {
-        uint8_t pwm = ((float)(kelvin - 2500) / (float)3500) * 255;
+        uint8_t pwm = ((kelvin - 2500L) / 3500L) * 255;
         cw = pwm;
       }
 
       uint8_t ww = 0;
       if (kelvin < 5500)
       {
-        uint8_t pwm = ((float)(kelvin - 2000) / (float)3500) * 255;
+        uint8_t pwm = ((kelvin - 2000L) / 3500L) * 255;
         ww = 255 - pwm;
       }
 
