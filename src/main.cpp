@@ -16,7 +16,8 @@
 
 /*--------------------------- Libraries -------------------------------*/
 #include <Arduino.h>
-#include <ledPWM.h>                 // For PWM LED controller
+#include <ledPWM.h>                   // For PWM LED controller
+#include <OXRS_HASS.h>                // For Home Assistant self-discovery
 
 #if defined(OXRS_ESP32)
 #include <OXRS_32.h>                  // ESP32 support
@@ -50,8 +51,8 @@ OXRS_LILYGOPOE oxrs;
 
 #define MIN_PWM                     0
 #define MAX_PWM                     255
-#define MIN_MIRED                   167
-#define MAX_MIRED                   500
+#define MIN_MIREDS                  167
+#define MAX_MIREDS                  500
 
 /*-------------------------- Internal datatypes --------------------------*/
 struct LEDStrip
@@ -65,7 +66,8 @@ struct LEDStrip
   uint16_t mired;
 
   uint32_t lastFadeUs;
-  uint8_t publishState;
+  bool publishState;
+  bool publishHassDiscovery;
 };
 
 /*--------------------------- Global Variables ---------------------------*/
@@ -77,6 +79,10 @@ PWMDriver pwmDriver;
 
 // LED strip config (allow for a max of all single LED strips)
 LEDStrip ledStrips[PWM_CHANNEL_COUNT];
+
+/*--------------------------- Instantiate Globals ---------------------*/
+// Home Assistant self-discovery
+OXRS_HASS hass(oxrs.getMQTT());
 
 /*--------------------------- JSON builders -----------------*/
 void setConfigSchema()
@@ -113,6 +119,9 @@ void setConfigSchema()
   fadeIntervalUs["type"] = "integer";
   fadeIntervalUs["minimum"] = 0;
 
+  // Add any Home Assistant config
+  hass.setConfigSchema(json);
+
   // Pass our config schema down to the hardware library
   oxrs.setConfigSchema(json.as<JsonVariant>());
 }
@@ -140,8 +149,8 @@ void setCommandSchema()
 
   JsonObject color_temp = json["color_temp"].to<JsonObject>();
   color_temp["type"] = "integer";
-  color_temp["minimum"] = MIN_MIRED;
-  color_temp["maximum"] = MAX_MIRED;
+  color_temp["minimum"] = MIN_MIREDS;
+  color_temp["maximum"] = MAX_MIREDS;
 
   JsonObject color = json["color"].to<JsonObject>();
   color["type"] = "object";
@@ -236,6 +245,67 @@ void calculateColorTemp(LEDStrip * ledStrip)
   }
 }
 
+void publishHassDiscovery(LEDStrip * ledStrip)
+{
+  uint8_t strip = ledStrip->index + 1;
+
+  char component[8];
+  sprintf_P(component, PSTR("light"));
+
+  char stripId[16];
+  sprintf_P(stripId, PSTR("led_strip_%d"), strip);
+
+  char stripName[16];
+  sprintf_P(stripName, PSTR("LED Strip %d"), strip);
+
+  char mqttTopic[64];
+  char mqttTemplate[512];
+
+  // JSON config payload (empty if the input is disabled, to clear any existing config)
+  JsonDocument json;
+
+  hass.getDiscoveryJson(json, stripId);
+
+  json["name"] = stripName;
+  json["schema"] = "template";
+  json["stat_t"] = oxrs.getMQTT()->getStatusTopic(mqttTopic);
+  json["cmd_t"] = oxrs.getMQTT()->getCommandTopic(mqttTopic);
+
+  sprintf_P(mqttTemplate, PSTR("{'strip':%d,'state':'off'}"), strip);
+  json["cmd_off_tpl"] = mqttTemplate;
+
+  sprintf_P(mqttTemplate, PSTR("{'strip':%d,'state':'on'{%% if brightness is defined %%},'brightness':{{ brightness }}{%% endif %%}{%% if color_temp is defined %%},'color_temp':{{ color_temp }}{%% endif %%}{%% if red is defined and green is defined and blue is defined %%},'color':{'r':{{ red }},'g':{{ green }},'b':{{ blue }}}{%% endif %%}}"), strip);
+  json["cmd_on_tpl"] = mqttTemplate;
+
+  sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d %%}{{ value_json.state }}{%% endif %%}"), strip);
+  json["stat_tpl"] = mqttTemplate;
+
+  sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d %%}{{ value_json.brightness }}{%% endif %%}"), strip);
+  json["bri_tpl"] = mqttTemplate;
+
+  if (ledStrip->channels == 2 || ledStrip->channels == 5)
+  {
+    sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d %%}{{ value_json.color_temp }}{%% endif %%}"), strip);
+    json["clr_temp_tpl"] = mqttTemplate;
+
+    json["max_mirs"] = MAX_MIREDS;
+    json["min_mirs"] = MIN_MIREDS;
+  }
+  
+  if (ledStrip->channels >= 3)
+  {
+    sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d %%}{{ value_json.color.r }}{%% endif %%}"), strip);
+    json["r_tpl"] = mqttTemplate;
+    sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d %%}{{ value_json.color.g }}{%% endif %%}"), strip);
+    json["g_tpl"] = mqttTemplate;
+    sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d %%}{{ value_json.color.b }}{%% endif %%}"), strip);
+    json["b_tpl"] = mqttTemplate;
+  }
+
+  // Publish retained and stop trying once successful 
+  hass.publishDiscoveryJson(json, component, stripId);
+}
+
 void publishStripStatus(LEDStrip * ledStrip)
 {
   JsonDocument json;
@@ -249,24 +319,17 @@ void publishStripStatus(LEDStrip * ledStrip)
 
     switch (ledStrip->channels)
     {
-      case 1:
-        json["color_mode"] = "brightness";
-        break;
-
       case 2:
-        json["color_mode"] = "color_temp";
         json["color_temp"] = ledStrip->mired;
         break;
 
       case 3:
-        json["color_mode"] = "rgb";
         json["color"]["r"] = ledStrip->color[0];
         json["color"]["g"] = ledStrip->color[1];
         json["color"]["b"] = ledStrip->color[2];
         break;
 
       case 4:
-        json["color_mode"] = "rgbw";
         json["color"]["r"] = ledStrip->color[0];
         json["color"]["g"] = ledStrip->color[1];
         json["color"]["b"] = ledStrip->color[2];
@@ -274,7 +337,6 @@ void publishStripStatus(LEDStrip * ledStrip)
       break;
       
       case 5:
-        json["color_mode"] = "rgbww";
         json["color"]["r"] = ledStrip->color[0];
         json["color"]["g"] = ledStrip->color[1];
         json["color"]["b"] = ledStrip->color[2];
@@ -319,7 +381,7 @@ void ledFade(LEDStrip * ledStrip, uint8_t channelOffset, uint8_t color[])
     {
       publishStripStatus(ledStrip);
 
-      ledStrip->publishState = 0;
+      ledStrip->publishState = false;
     }
   }
 }
@@ -342,6 +404,9 @@ void initialiseStrips()
     }
 
     ledStrip->lastFadeUs = 0L;
+
+    ledStrip->publishState = false;
+    ledStrip->publishHassDiscovery = true;
   }
 }
 
@@ -355,6 +420,10 @@ void processStrips()
   for (uint8_t strip = 0; strip < PWM_CHANNEL_COUNT; strip++)
   {
     LEDStrip *ledStrip = &ledStrips[strip];
+
+    // ignore if the strip is not configured
+    if (ledStrip->channels == 0)
+      continue;;
 
     if (ledStrip->state == LED_STATE_OFF)
     {
@@ -378,6 +447,25 @@ void processStrips()
 
     // increase offset
     channelOffset += ledStrip->channels;
+  }
+}
+
+void publishHassDiscovery()
+{
+  for (uint8_t strip = 0; strip < PWM_CHANNEL_COUNT; strip++)
+  {
+    LEDStrip *ledStrip = &ledStrips[strip];
+
+    // ignore if the strip is not configured
+    if (ledStrip->channels == 0)
+      continue;;
+
+    if (ledStrip->publishHassDiscovery)
+    {
+      publishHassDiscovery(ledStrip);
+
+      ledStrip->publishHassDiscovery = false;
+    }
   }
 }
 
@@ -424,7 +512,7 @@ void jsonStripConfig(JsonVariant json)
 
   ledStrip->state = LED_STATE_OFF;
   ledStrip->brightness = MAX_PWM;
-  ledStrip->mired = MIN_MIRED;
+  ledStrip->mired = MIN_MIREDS;
 
   // if only a single channel control is via brightness only
   if (ledStrip->channels == 1) 
@@ -438,6 +526,9 @@ void jsonStripConfig(JsonVariant json)
       ledStrip->color[i] = MIN_PWM;
     }
   }
+
+  // republish the HA discovery payload if the config changes
+  ledStrip->publishHassDiscovery = true;
 }
 
 void jsonStripCommand(JsonVariant json)
@@ -454,12 +545,12 @@ void jsonStripCommand(JsonVariant json)
     if (strcmp(json["state"], "on") == 0)
     {
       ledStrip->state = LED_STATE_ON;
-      ledStrip->publishState = 1;
+      ledStrip->publishState = true;
     }
     else if (strcmp(json["state"], "off") == 0)
     {
       ledStrip->state = LED_STATE_OFF;
-      ledStrip->publishState = 1;
+      ledStrip->publishState = true;
     }
     else 
     {
@@ -470,13 +561,13 @@ void jsonStripCommand(JsonVariant json)
   if (json.containsKey("brightness"))
   {
     ledStrip->brightness = json["brightness"].as<uint8_t>();
-    ledStrip->publishState = 1;
+    ledStrip->publishState = true;
   }
 
   if (json.containsKey("color_temp"))
   {    
     ledStrip->mired = json["color_temp"].as<uint16_t>();
-    ledStrip->publishState = 1;
+    ledStrip->publishState = true;
   }
 
   if (json.containsKey("color"))
@@ -508,7 +599,7 @@ void jsonStripCommand(JsonVariant json)
       ledStrip->color[4] = color["w"].as<uint8_t>();
     }
 
-    ledStrip->publishState = 1;
+    ledStrip->publishState = true;
   }
 }
 
@@ -526,6 +617,9 @@ void jsonConfig(JsonVariant json)
   {
     g_fade_interval_us = json["fadeIntervalUs"].as<uint32_t>();
   }
+
+  // Handle any Home Assistant config
+  hass.parseConfig(json);
 }
 
 void jsonCommand(JsonVariant json)
@@ -564,4 +658,10 @@ void loop()
 
   // Process any PWM updates
   processStrips();
+
+  // Check if we need to publish any Home Assistant discovery payloads
+  if (hass.isDiscoveryEnabled())
+  {
+    publishHassDiscovery();
+  }
 }
