@@ -64,9 +64,7 @@ struct LEDStrip
   uint8_t color[MAX_LED_COUNT];
   uint16_t mired;
 
-  uint32_t fadeIntervalUs;
   uint32_t lastFadeUs;
-
   uint8_t publishState;
 };
 
@@ -199,6 +197,45 @@ void initialisePwmDrivers()
 }
 
 /*--------------------------- LED -----------------*/
+void calculateColorTemp(LEDStrip * ledStrip)
+{
+  // only need to calculate colour temp for cct and rgbww strips
+  if (ledStrip->channels != 2 && ledStrip->channels != 5)
+    return;
+
+  float_t kelvin = 1000000L / ledStrip->mired;
+
+  // CW range is 2500-6000K
+  // WW range is 2000-5500K
+  if (kelvin < 2000) kelvin = 2000L;
+  if (kelvin > 6000) kelvin = 6000L;
+
+  uint8_t cw = MIN_PWM;
+  if (kelvin > 2500)
+  {
+    uint8_t pwm = ((kelvin - 2500L) / 3500L) * MAX_PWM;
+    cw = pwm;
+  }
+
+  uint8_t ww = MIN_PWM;
+  if (kelvin < 5500)
+  {
+    uint8_t pwm = ((kelvin - 2000L) / 3500L) * MAX_PWM;
+    ww = MAX_PWM - pwm;
+  }
+
+  if (ledStrip->channels == 2) 
+  {
+    ledStrip->color[0] = cw;
+    ledStrip->color[1] = ww;
+  }
+  else
+  {
+    ledStrip->color[3] = cw;
+    ledStrip->color[4] = ww;
+  }
+}
+
 void publishStripStatus(LEDStrip * ledStrip)
 {
   JsonDocument json;
@@ -252,7 +289,7 @@ void publishStripStatus(LEDStrip * ledStrip)
 
 void ledFade(LEDStrip * ledStrip, uint8_t channelOffset, uint8_t color[])
 {
-  if ((micros() - ledStrip->lastFadeUs) > ledStrip->fadeIntervalUs)
+  if ((micros() - ledStrip->lastFadeUs) > g_fade_interval_us)
   {
     if (ledStrip->channels == 1) 
     {
@@ -304,7 +341,6 @@ void initialiseStrips()
       ledStrip->color[i] = MIN_PWM;
     }
 
-    ledStrip->fadeIntervalUs = g_fade_interval_us; 
     ledStrip->lastFadeUs = 0L;
   }
 }
@@ -326,6 +362,8 @@ void processStrips()
     }
     else if (ledStrip->state == LED_STATE_ON)
     {
+      calculateColorTemp(ledStrip);
+
       float_t brightness_pct = ((float_t)ledStrip->brightness / (float_t)MAX_PWM);
     
       uint8_t color[MAX_LED_COUNT];
@@ -413,15 +451,15 @@ void jsonStripCommand(JsonVariant json)
 
   if (json.containsKey("state"))
   {
-    ledStrip->publishState = 1;
-
     if (strcmp(json["state"], "on") == 0)
     {
       ledStrip->state = LED_STATE_ON;
+      ledStrip->publishState = 1;
     }
     else if (strcmp(json["state"], "off") == 0)
     {
       ledStrip->state = LED_STATE_OFF;
+      ledStrip->publishState = 1;
     }
     else 
     {
@@ -431,51 +469,18 @@ void jsonStripCommand(JsonVariant json)
 
   if (json.containsKey("brightness"))
   {
-    ledStrip->publishState = 1;
-
     ledStrip->brightness = json["brightness"].as<uint8_t>();
+    ledStrip->publishState = 1;
   }
 
   if (json.containsKey("color_temp"))
-  {
+  {    
     ledStrip->mired = json["color_temp"].as<uint16_t>();
-    float_t kelvin = 1000000L / ledStrip->mired;
-
-    // CW range is 2500-6000K
-    // WW range is 2000-5500K
-    if (kelvin < 2000) kelvin = 2000L;
-    if (kelvin > 6000) kelvin = 6000L;
-
-    uint8_t cw = MIN_PWM;
-    if (kelvin > 2500)
-    {
-      uint8_t pwm = ((kelvin - 2500L) / 3500L) * MAX_PWM;
-      cw = pwm;
-    }
-
-    uint8_t ww = MIN_PWM;
-    if (kelvin < 5500)
-    {
-      uint8_t pwm = ((kelvin - 2000L) / 3500L) * MAX_PWM;
-      ww = MAX_PWM - pwm;
-    }
-
-    if (ledStrip->channels == 2) 
-    {
-      ledStrip->color[0] = cw;
-      ledStrip->color[1] = ww;
-    }
-    else
-    {
-      ledStrip->color[3] = cw;
-      ledStrip->color[4] = ww;
-    }
+    ledStrip->publishState = 1;
   }
 
   if (json.containsKey("color"))
   {
-    ledStrip->publishState = 1;
-
     JsonObject color = json["color"].as<JsonObject>();
 
     if (color.containsKey("r"))
@@ -502,6 +507,8 @@ void jsonStripCommand(JsonVariant json)
     {
       ledStrip->color[4] = color["w"].as<uint8_t>();
     }
+
+    ledStrip->publishState = 1;
   }
 }
 
