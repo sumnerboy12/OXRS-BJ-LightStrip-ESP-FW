@@ -280,12 +280,12 @@ void publishHassDiscovery(LEDStrip * ledStrip)
   sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d %%}{{ value_json.state }}{%% endif %%}"), strip);
   json["stat_tpl"] = mqttTemplate;
 
-  sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d %%}{{ value_json.brightness }}{%% endif %%}"), strip);
+  sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d and value_json.brightness is defined %%}{{ value_json.brightness }}{%% endif %%}"), strip);
   json["bri_tpl"] = mqttTemplate;
 
   if (ledStrip->channels == 2 || ledStrip->channels == 5)
   {
-    sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d %%}{{ value_json.color_temp }}{%% endif %%}"), strip);
+    sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d and value_json.color_temp is defined %%}{{ value_json.color_temp }}{%% endif %%}"), strip);
     json["clr_temp_tpl"] = mqttTemplate;
 
     json["max_mirs"] = MAX_MIREDS;
@@ -294,11 +294,11 @@ void publishHassDiscovery(LEDStrip * ledStrip)
   
   if (ledStrip->channels >= 3)
   {
-    sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d %%}{{ value_json.color.r }}{%% endif %%}"), strip);
+    sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d and value_json.color is defined %%}{{ value_json.color.r }}{%% endif %%}"), strip);
     json["r_tpl"] = mqttTemplate;
-    sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d %%}{{ value_json.color.g }}{%% endif %%}"), strip);
+    sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d and value_json.color is defined %%}{{ value_json.color.g }}{%% endif %%}"), strip);
     json["g_tpl"] = mqttTemplate;
-    sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d %%}{{ value_json.color.b }}{%% endif %%}"), strip);
+    sprintf_P(mqttTemplate, PSTR("{%% if value_json.strip == %d and value_json.color is defined %%}{{ value_json.color.b }}{%% endif %%}"), strip);
     json["b_tpl"] = mqttTemplate;
   }
 
