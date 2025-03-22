@@ -312,38 +312,34 @@ void publishStripStatus(LEDStrip * ledStrip)
 
   json["strip"] = ledStrip->index + 1;
   json["state"] = ledStrip->state == LED_STATE_ON ? "on" : "off";
+  json["brightness"] = ledStrip->brightness;
 
-  if (ledStrip->state == LED_STATE_ON)
+  switch (ledStrip->channels)
   {
-    json["brightness"] = ledStrip->brightness;
-
-    switch (ledStrip->channels)
-    {
-      case 2:
-        json["color_temp"] = ledStrip->mired;
-        break;
-
-      case 3:
-        json["color"]["r"] = ledStrip->color[0];
-        json["color"]["g"] = ledStrip->color[1];
-        json["color"]["b"] = ledStrip->color[2];
-        break;
-
-      case 4:
-        json["color"]["r"] = ledStrip->color[0];
-        json["color"]["g"] = ledStrip->color[1];
-        json["color"]["b"] = ledStrip->color[2];
-        json["color"]["w"] = ledStrip->color[3];
+    case 2:
+      json["color_temp"] = ledStrip->mired;
       break;
-      
-      case 5:
-        json["color"]["r"] = ledStrip->color[0];
-        json["color"]["g"] = ledStrip->color[1];
-        json["color"]["b"] = ledStrip->color[2];
-        json["color"]["c"] = ledStrip->color[3];
-        json["color"]["w"] = ledStrip->color[4];
-        break;
-    }
+
+    case 3:
+      json["color"]["r"] = ledStrip->color[0];
+      json["color"]["g"] = ledStrip->color[1];
+      json["color"]["b"] = ledStrip->color[2];
+      break;
+
+    case 4:
+      json["color"]["r"] = ledStrip->color[0];
+      json["color"]["g"] = ledStrip->color[1];
+      json["color"]["b"] = ledStrip->color[2];
+      json["color"]["w"] = ledStrip->color[3];
+    break;
+    
+    case 5:
+      json["color"]["r"] = ledStrip->color[0];
+      json["color"]["g"] = ledStrip->color[1];
+      json["color"]["b"] = ledStrip->color[2];
+      json["color"]["c"] = ledStrip->color[3];
+      json["color"]["w"] = ledStrip->color[4];
+      break;
   }
 
   oxrs.publishStatus(json);
